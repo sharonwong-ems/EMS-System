@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Report · EMS System</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <style>
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .kpi .label { color: var(--muted); font-size: .9rem; }
+    .kpi .value { font-size: 1.7rem; font-weight: 700; margin: 4px 0; }
+    .kpi .value.bad { color: var(--danger); }
+    .kpi .sub { font-size: .9rem; color: var(--muted); }
+    .kpi .action { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: .9rem; background: var(--info-bg); color: var(--info); }
+    .kpi .action.warn { background: var(--warn-bg); color: var(--warn); }
+    .kpi .action.danger { background: var(--danger-bg); color: var(--danger); }
+    .kpi .action.ok { background: var(--ok-bg); color: var(--ok); }
+    .chart-box { position: relative; height: 260px; }
+    table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    .table-wrap { overflow-x: auto; }
+    textarea { min-height: 140px; resize: vertical; }
+    .check { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--text); font-size: 1rem; }
+    .check input { width: auto; }
+    .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .brief { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    .brief .meta { color: var(--muted); font-size: .85rem; margin-bottom: 6px; }
+    .brief .body { white-space: pre-wrap; }
+    .steps { margin: 0 0 8px; padding-left: 20px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="index.html">← EMS System</a>
+    <span class="who"><span id="whoName"></span> <span id="whoRole" class="badge"></span></span>
+    <button class="small secondary" type="button" onclick="signOut()">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <h2 id="title" style="margin:8px 0 16px">Report 报表</h2>
+    <div id="pageMsg" class="msg hidden"></div>
+
+    <!-- KPIs -->
+    <div class="kpis">
+      <div class="kpi">
+        <div class="label">Sales this month 本月销售额</div>
+        <div id="kSales" class="value">…</div>
+        <div id="kSalesSub" class="sub"></div>
+        <div id="kSalesAct" class="action"></div>
+      </div>
+      <div class="kpi">
+        <div class="label">Overdue unpaid orders 逾期未付</div>
+        <div id="kOver" class="value">…</div>
+        <div id="kOverSub" class="sub"></div>
+        <div id="kOverAct" class="action"></div>
+      </div>
+      <div class="kpi">
+        <div class="label">Top sales item this month 最畅销肥料</div>
+        <div id="kTop" class="value" style="font-size:1.3rem">…</div>
+        <div id="kTopSub" class="sub"></div>
+        <div id="kTopAct" class="action"></div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card">
+      <h2>Sales, last 6 months 近 6 个月销售额</h2>
+      <div class="chart-box"><canvas id="salesChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Top 5 fertilizers this month 本月前 5 名</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fertilizer</th><th class="num">Bags sold</th><th class="num">Sales</th><th class="num">Stock left</th></tr></thead>
+          <tbody id="topTable"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Overdue orders 逾期名单</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Customer</th><th>Order date</th><th class="num">Days</th><th class="num">Amount</th></tr></thead>
+          <tbody id="overTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- AI brief -->
+    <div class="card">
+      <h2>AI monthly brief AI 月报</h2>
+      <ol class="steps">
+        <li>Click <b>Prepare AI prompt</b>, then <b>Copy prompt</b>.</li>
+        <li>Paste it into Claude (claude.ai) and get the answer.</li>
+        <li>Paste the answer below, read and check it, tick the box, then <b>Save</b>.</li>
+      </ol>
+      <div class="btns">
+        <button id="prepBtn" type="button">Prepare AI prompt</button>
+        <button id="copyBtn" type="button" class="secondary" disabled>Copy prompt</button>
+      </div>
+      <label for="prompt">Prompt (made from the numbers on this page)</label>
+      <textarea id="prompt" readonly placeholder="Click “Prepare AI prompt”"></textarea>
+      <label for="answer">Claude's answer (paste here)</label>
+      <textarea id="answer" placeholder="Paste the answer from Claude here"></textarea>
+      <label class="check"><input id="checked" type="checkbox"> I have checked this 我已检查</label>
+      <button id="saveBtn" class="full" type="button">Save brief</button>
+      <div id="aiMsg" class="msg hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2>Saved briefs 已保存的月报</h2>
+      <div id="briefs" class="muted">Loading…</div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ME, SETTINGS, DATA = {};
+
+function iso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function monthName(d) { return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }); }
+
+async function loadReport() {
+  const now = new Date();
+  const thisStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const sixStart  = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - SETTINGS.overdueDays);
+
+  const [sales, overdue, products] = await Promise.all([
+    sb.from('orders').select('order_date,amount,items').in('status', ['approved', 'paid']).gte('order_date', iso(sixStart)),
+    sb.from('orders').select('customer_name,order_date,amount').eq('status', 'approved').lt('order_date', iso(cutoff)).order('order_date'),
+    sb.from('products').select('name,stock_bags,active')
+  ]);
+  for (const r of [sales, overdue, products]) if (r.error) throw r.error;
+
+  const rows = sales.data || [];
+  const inMonth = (o, start) => {
+    const [y, m] = o.order_date.split('-').map(Number);
+    return y === start.getFullYear() && m === start.getMonth() + 1;
+  };
+
+  // KPI 1: sales this month vs last month
+  const thisSales = rows.filter(o => inMonth(o, thisStart)).reduce((s, o) => s + Number(o.amount), 0);
+  const lastSales = rows.filter(o => inMonth(o, lastStart)).reduce((s, o) => s + Number(o.amount), 0);
+  const thisCount = rows.filter(o => inMonth(o, thisStart)).length;
+
+  // 6-month chart
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ label: monthName(start), total: rows.filter(o => inMonth(o, start)).reduce((s, o) => s + Number(o.amount), 0) });
+  }
+
+  // KPI 3: top items this month (by bags)
+  const stockBy = {};
+  (products.data || []).forEach(p => { stockBy[p.name] = p.stock_bags; });
+  const agg = {};
+  rows.filter(o => inMonth(o, thisStart)).forEach(o => (o.items || []).forEach(it => {
+    const a = agg[it.name] || (agg[it.name] = { name: it.name, bags: 0, sales: 0 });
+    a.bags += Number(it.bags); a.sales += Number(it.bags) * Number(it.price);
+  }));
+  const top = Object.values(agg).sort((a, b) => b.bags - a.bags).slice(0, 5);
+
+  // KPI 2: overdue
+  const over = (overdue.data || []).map(o => ({ ...o, days: daysSince(o.order_date) }));
+  const overTotal = over.reduce((s, o) => s + Number(o.amount), 0);
+
+  const low = (products.data || []).filter(p => p.active && p.stock_bags < SETTINGS.lowStockBags);
+
+  DATA = { monthLabel: monthName(thisStart), lastLabel: monthName(lastStart), thisSales, lastSales, thisCount,
+           months, top, over, overTotal, low, stockBy };
+  render();
+}
+
+function render() {
+  const d = DATA;
+  $('title').textContent = `Report 报表 — ${d.monthLabel}`;
+
+  // Sales KPI
+  $('kSales').textContent = fmtRM(d.thisSales);
+  const diff = d.thisSales - d.lastSales;
+  $('kSalesSub').textContent = `${d.thisCount} order(s). Last month (${d.lastLabel}): ${fmtRM(d.lastSales)}`;
+  if (d.thisSales < d.lastSales) {
+    $('kSalesAct').className = 'action warn';
+    $('kSalesAct').textContent = `${fmtRM(-diff)} lower than last month so far. Action: meet the team and find out why.`;
+  } else {
+    $('kSalesAct').className = 'action ok';
+    $('kSalesAct').textContent = 'Same or higher than last month. Action: keep going.';
+  }
+
+  // Overdue KPI
+  $('kOver').textContent = d.over.length;
+  $('kOver').classList.toggle('bad', d.over.length > 0);
+  $('kOverSub').textContent = `Total unpaid: ${fmtRM(d.overTotal)} (more than ${SETTINGS.overdueDays} days)`;
+  if (d.over.length) {
+    $('kOverAct').className = 'action danger';
+    $('kOverAct').innerHTML = `Action: manager gives this list to staff to follow up payment. <a href="orders.html?filter=overdue">Open list</a>`;
+  } else {
+    $('kOverAct').className = 'action ok';
+    $('kOverAct').textContent = 'No overdue orders. Action: none needed.';
+  }
+
+  // Top item KPI
+  if (d.top.length) {
+    const t = d.top[0];
+    $('kTop').textContent = t.name;
+    $('kTopSub').textContent = `${t.bags} bags sold, ${fmtRM(t.sales)}. Stock left: ${d.stockBy[t.name] ?? '—'} bags`;
+    const lowTop = d.top.filter(x => (d.stockBy[x.name] ?? 0) < SETTINGS.lowStockBags);
+    $('kTopAct').className = lowTop.length ? 'action warn' : 'action';
+    $('kTopAct').textContent = lowTop.length
+      ? `Action: order more ${lowTop.map(x => x.name).join(', ')} now — stock is low.`
+      : 'Action: make sure these top items never run out.';
+  } else {
+    $('kTop').textContent = '—';
+    $('kTopSub').textContent = 'No approved sales yet this month.';
+    $('kTopAct').className = 'action';
+    $('kTopAct').textContent = 'Action: check that orders are being approved.';
+  }
+
+  // Tables
+  $('topTable').innerHTML = d.top.length ? d.top.map(t => `
+    <tr><td>${esc(t.name)}</td><td class="num">${t.bags}</td><td class="num">${fmtRM(t.sales)}</td><td class="num">${d.stockBy[t.name] ?? '—'}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">No sales yet this month.</td></tr>';
+  $('overTable').innerHTML = d.over.length ? d.over.map(o => `
+    <tr><td>${esc(o.customer_name)}</td><td>${fmtDate(o.order_date)}</td><td class="num">${o.days}</td><td class="num">${fmtRM(o.amount)}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">No overdue orders.</td></tr>';
+
+  drawChart();
+}
+
+let chart;
+function drawChart() {
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue('--accent').trim();
+  const muted = css.getPropertyValue('--muted').trim();
+  const line = css.getPropertyValue('--line').trim();
+  if (chart) chart.destroy();
+  chart = new Chart($('salesChart'), {
+    type: 'bar',
+    data: { labels: DATA.months.map(m => m.label), datasets: [{ label: 'Sales (RM)', data: DATA.months.map(m => m.total), backgroundColor: accent, borderRadius: 6 }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtRM(c.parsed.y) } } },
+      scales: {
+        x: { ticks: { color: muted }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { color: muted, callback: v => 'RM ' + Number(v).toLocaleString('en-MY') }, grid: { color: line } }
+      }
+    }
+  });
+}
+
+// ---------- AI brief ----------
+function buildPrompt() {
+  const d = DATA;
+  const lines = [];
+  lines.push(`You are helping the owner of a small fertilizer trading company in Malaysia. Write a short monthly brief (max 200 words) in simple English, with 3 clear actions at the end. Use only the numbers below. Do not make up any numbers.`);
+  lines.push('');
+  lines.push(`Month: ${d.monthLabel} (as of ${fmtDate(todayISO())})`);
+  lines.push(`Sales this month: ${fmtRM(d.thisSales)} from ${d.thisCount} approved/paid orders`);
+  lines.push(`Sales last month (${d.lastLabel}): ${fmtRM(d.lastSales)}`);
+  lines.push(`Sales by month: ${d.months.map(m => `${m.label} ${fmtRM(m.total)}`).join('; ')}`);
+  lines.push('');
+  lines.push(`Overdue orders (approved, not paid for more than ${SETTINGS.overdueDays} days): ${d.over.length}, total ${fmtRM(d.overTotal)}`);
+  d.over.slice(0, 20).forEach(o => lines.push(`- ${o.customer_name}: ${fmtRM(o.amount)}, ${o.days} days`));
+  lines.push('');
+  lines.push('Top fertilizers this month (bags sold, sales, stock left):');
+  if (d.top.length) d.top.forEach(t => lines.push(`- ${t.name}: ${t.bags} bags, ${fmtRM(t.sales)}, ${d.stockBy[t.name] ?? '—'} bags left`));
+  else lines.push('- none yet');
+  lines.push('');
+  lines.push(`Low stock (below ${SETTINGS.lowStockBags} bags): ${d.low.length ? d.low.map(p => `${p.name} ${p.stock_bags} bags`).join('; ') : 'none'}`);
+  return lines.join('\n');
+}
+
+$('prepBtn').onclick = () => {
+  $('prompt').value = buildPrompt();
+  $('copyBtn').disabled = false;
+  $('aiMsg').classList.add('hidden');
+};
+
+$('copyBtn').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('prompt').value);
+    showMsg($('aiMsg'), 'Prompt copied. Now paste it into Claude.', 'ok');
+  } catch {
+    $('prompt').select();
+    showMsg($('aiMsg'), 'Could not copy automatically. The text is selected — press Ctrl+C (or long-press and Copy on phone).');
+  }
+};
+
+$('saveBtn').onclick = async () => {
+  const content = $('answer').value.trim();
+  if (!$('prompt').value) return showMsg($('aiMsg'), 'Please click “Prepare AI prompt” first.');
+  if (!content) return showMsg($('aiMsg'), 'Please paste Claude\'s answer first.');
+  if (!$('checked').checked) return showMsg($('aiMsg'), 'Please read the answer and tick “I have checked this” before saving.');
+  $('saveBtn').disabled = true;
+  const { error } = await sb.from('ai_briefs').insert({
+    title: `Monthly brief — ${DATA.monthLabel}`, prompt: $('prompt').value, content, checked: true
+  });
+  $('saveBtn').disabled = false;
+  if (error) return showMsg($('aiMsg'), friendlyError(error));
+  $('answer').value = ''; $('checked').checked = false;
+  showMsg($('aiMsg'), 'Brief saved.', 'ok');
+  loadBriefs();
+};
+
+async function loadBriefs() {
+  const { data, error } = await sb.from('ai_briefs').select('title,content,created_at').order('created_at', { ascending: false }).limit(12);
+  if (error) { $('briefs').textContent = friendlyError(error); return; }
+  $('briefs').classList.toggle('muted', !(data || []).length);
+  $('briefs').innerHTML = (data || []).length ? data.map(b => `
+    <div class="brief"><div class="meta">${esc(b.title)} · saved ${fmtDate(b.created_at)}</div><div class="body">${esc(b.content)}</div></div>`).join('')
+    : 'No briefs saved yet.';
+}
+
+(async () => {
+  ME = await requireRole(['owner']);
+  if (!ME) return;
+  $('whoName').textContent = ME.full_name || ME.email;
+  $('whoRole').textContent = ROLE_LABEL[ME.role];
+  try {
+    SETTINGS = await getSettings();
+    await loadReport();
+  } catch (err) {
+    showMsg($('pageMsg'), friendlyError(err));
+  }
+  loadBriefs();
+})();
+</script>
+</body>
+</html>
