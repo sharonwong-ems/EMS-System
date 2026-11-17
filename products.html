@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fertilizers &amp; Stock · EMS System</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <style>
+    .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+    .row > * { flex: 1 1 140px; }
+    .prod { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    .prod.off { opacity: .6; }
+    .prod .head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+    .prod .name { font-weight: 700; }
+    .prod .stock { font-size: 1.3rem; font-weight: 700; white-space: nowrap; }
+    .prod .stock.low { color: var(--danger); }
+    .prod .meta { color: var(--muted); font-size: .9rem; margin-top: 2px; }
+    .prod .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+    .prod .tools input { width: 110px; flex: 0 0 110px; padding: 6px 8px; }
+    .st { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .st.low { background: var(--danger-bg); color: var(--danger); }
+    .st.off { background: var(--line); color: var(--muted); }
+    button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="index.html">← EMS System</a>
+    <span class="who"><span id="whoName"></span> <span id="whoRole" class="badge"></span></span>
+    <button class="small secondary" type="button" onclick="signOut()">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <!-- New fertilizer (manager / owner) -->
+    <div id="newCard" class="card hidden">
+      <h2>Add a new fertilizer 新增肥料</h2>
+      <form id="newForm">
+        <div class="row">
+          <div>
+            <label for="nName">Name 肥料名</label>
+            <input id="nName" type="text" required maxlength="80">
+          </div>
+          <div>
+            <label for="nPrice">Price per bag (RM) 每包价钱</label>
+            <input id="nPrice" type="number" min="0" step="0.01" required>
+          </div>
+          <div>
+            <label for="nStock">Starting stock (bags) 现有库存</label>
+            <input id="nStock" type="number" min="0" step="1" required value="0">
+          </div>
+        </div>
+        <button class="full" type="submit">Add fertilizer</button>
+        <div id="newMsg" class="msg hidden"></div>
+      </form>
+    </div>
+
+    <!-- List -->
+    <div class="card">
+      <h2>Fertilizers &amp; stock 肥料与库存</h2>
+      <p id="note" class="muted"></p>
+      <div id="listMsg" class="msg hidden"></div>
+      <div id="list" style="margin-top:12px">Loading…</div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ME, SETTINGS, PRODUCTS = [];
+const canEdit = () => ME.role === 'manager' || ME.role === 'owner';
+
+async function loadProducts() {
+  const { data, error } = await sb.from('products').select('*').order('active', { ascending: false }).order('name');
+  if (error) { $('list').innerHTML = ''; return showMsg($('listMsg'), friendlyError(error)); }
+  PRODUCTS = data || [];
+  render();
+}
+
+function render() {
+  if (!PRODUCTS.length) { $('list').innerHTML = '<p class="muted">No fertilizers yet.</p>'; return; }
+  $('list').innerHTML = PRODUCTS.map(p => {
+    const low = p.active && p.stock_bags < SETTINGS.lowStockBags;
+    const waMsg = `Hi ${SETTINGS.supplierName}, we would like to order more ${p.name}. Our stock is now ${p.stock_bags} bags.`;
+    let tools = '';
+    if (canEdit()) {
+      tools = `
+        <div class="tools">
+          <input type="number" min="1" step="1" placeholder="Bags in" aria-label="Bags received for ${esc(p.name)}" data-in="${p.id}">
+          <button class="small" data-act="add" data-id="${p.id}">+ Add stock 进货</button>
+          <input type="number" min="0" step="0.01" value="${Number(p.price_per_bag).toFixed(2)}" aria-label="Price for ${esc(p.name)}" data-price="${p.id}">
+          <button class="small secondary" data-act="price" data-id="${p.id}">Save price</button>
+          <button class="small secondary" data-act="active" data-id="${p.id}">${p.active ? 'Stop selling' : 'Sell again'}</button>
+          ${low && SETTINGS.supplierWhatsapp ? `<a class="btn small" target="_blank" rel="noopener" href="${esc(waLink(SETTINGS.supplierWhatsapp, waMsg))}">WhatsApp supplier</a>` : ''}
+          ${ME.role === 'owner' ? `<button class="small danger" data-act="delete" data-id="${p.id}">Delete</button>` : ''}
+        </div>`;
+    }
+    return `
+      <div class="prod ${p.active ? '' : 'off'}">
+        <div class="head">
+          <span class="name">${esc(p.name)}</span>
+          <span class="stock ${low ? 'low' : ''}">${p.stock_bags} bags</span>
+        </div>
+        <div class="meta">
+          ${fmtRM(p.price_per_bag)} per bag
+          ${low ? ` · <span class="st low">Low stock 低库存</span>` : ''}
+          ${p.active ? '' : ` · <span class="st off">Not selling</span>`}
+        </div>
+        ${tools}
+      </div>`;
+  }).join('');
+}
+
+$('list').onclick = async (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const p = PRODUCTS.find(x => x.id === b.dataset.id);
+  if (!p) return;
+  $('listMsg').classList.add('hidden');
+  let res, done;
+
+  if (b.dataset.act === 'add') {
+    const n = parseInt(document.querySelector(`[data-in="${p.id}"]`).value, 10);
+    if (!(n > 0)) return showMsg($('listMsg'), 'Please type how many bags came in (more than 0).');
+    if (!confirm(`Add ${n} bags to ${p.name}? Stock will go from ${p.stock_bags} to ${p.stock_bags + n}.`)) return;
+    // Only update if nobody changed the stock in the meantime
+    res = await sb.from('products').update({ stock_bags: p.stock_bags + n }).eq('id', p.id).eq('stock_bags', p.stock_bags).select();
+    if (!res.error && !(res.data || []).length) {
+      await loadProducts();
+      return showMsg($('listMsg'), 'The stock was changed by someone else just now. Please check the new number and try again.');
+    }
+    done = `Added ${n} bags to ${p.name}. New stock: ${p.stock_bags + n} bags.`;
+
+  } else if (b.dataset.act === 'price') {
+    const v = Number(document.querySelector(`[data-price="${p.id}"]`).value);
+    if (!(v >= 0) || document.querySelector(`[data-price="${p.id}"]`).value === '') return showMsg($('listMsg'), 'Please type a price of RM 0.00 or more.');
+    const price = Math.round(v * 100) / 100;
+    if (!confirm(`Change the price of ${p.name} from ${fmtRM(p.price_per_bag)} to ${fmtRM(price)}? New orders will use the new price.`)) return;
+    res = await sb.from('products').update({ price_per_bag: price }).eq('id', p.id).select();
+    done = `Price of ${p.name} is now ${fmtRM(price)} per bag.`;
+
+  } else if (b.dataset.act === 'active') {
+    const to = !p.active;
+    if (!confirm(to ? `Start selling ${p.name} again?` : `Stop selling ${p.name}? It will not appear in new orders.`)) return;
+    res = await sb.from('products').update({ active: to }).eq('id', p.id).select();
+    done = to ? `${p.name} is on sale again.` : `${p.name} is no longer on sale.`;
+
+  } else if (b.dataset.act === 'delete') {
+    if (!confirm(`Delete ${p.name} forever? This cannot be undone. Old orders will still show its name.`)) return;
+    res = await sb.from('products').delete().eq('id', p.id).select();
+    done = `${p.name} deleted.`;
+  }
+
+  if (res.error) return showMsg($('listMsg'), friendlyError(res.error));
+  if (!(res.data || []).length) return showMsg($('listMsg'), 'Sorry, you are not allowed to do this.');
+  showMsg($('listMsg'), done, 'ok');
+  await loadProducts();
+};
+
+$('newForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const row = {
+    name: $('nName').value.trim(),
+    price_per_bag: Math.round(Number($('nPrice').value) * 100) / 100,
+    stock_bags: parseInt($('nStock').value, 10)
+  };
+  if (!row.name) return showMsg($('newMsg'), 'Please type the fertilizer name.');
+  if (!(row.price_per_bag >= 0)) return showMsg($('newMsg'), 'Please type a price of RM 0.00 or more.');
+  if (!(row.stock_bags >= 0)) return showMsg($('newMsg'), 'Starting stock must be 0 or more.');
+  const { error } = await sb.from('products').insert(row);
+  if (error) {
+    const dup = /duplicate key|unique/i.test(error.message || '');
+    return showMsg($('newMsg'), dup ? 'A fertilizer with this name already exists.' : friendlyError(error));
+  }
+  $('newForm').reset(); $('nStock').value = 0;
+  showMsg($('newMsg'), `Added ${row.name}: ${fmtRM(row.price_per_bag)} per bag, ${row.stock_bags} bags.`, 'ok');
+  await loadProducts();
+};
+
+(async () => {
+  ME = await requireRole(['staff', 'manager', 'owner']);
+  if (!ME) return;
+  $('whoName').textContent = ME.full_name || ME.email;
+  $('whoRole').textContent = ROLE_LABEL[ME.role];
+  try { SETTINGS = await getSettings(); }
+  catch (err) { return showMsg($('listMsg'), friendlyError(err)); }
+  $('note').textContent = `Stock below ${SETTINGS.lowStockBags} bags is marked as low stock.` +
+    (canEdit() ? ' Stock goes down by itself when an order is approved.' : '');
+  if (canEdit()) $('newCard').classList.remove('hidden');
+  await loadProducts();
+})();
+</script>
+</body>
+</html>
