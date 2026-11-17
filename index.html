@@ -3,27 +3,158 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EMS System — coming soon</title>
-  <style>
-    :root { --bg: #f6f7f9; --text: #1d2433; --muted: #6b7280; --accent: #2563eb; }
-    @media (prefers-color-scheme: dark) {
-      :root { --bg: #0f1420; --text: #e8ebf2; --muted: #9aa3b2; --accent: #60a5fa; }
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      padding: 16px; background: var(--bg); color: var(--text);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; text-align: center;
-    }
-    h1 { font-size: clamp(1.8rem, 6vw, 3rem); margin: 0 0 12px; }
-    h1 span { color: var(--accent); }
-    p { color: var(--muted); margin: 0; }
-  </style>
+  <title>EMS System</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
 </head>
 <body>
-  <main>
-    <h1>EMS System <span>— coming soon</span></h1>
-    <p>We are building something new. Please check back later.</p>
-  </main>
+
+  <!-- ===== Logged out: sign in / create account ===== -->
+  <section id="loginView" class="wrap hidden">
+    <div class="card center-card">
+      <h2>EMS System</h2>
+      <p class="muted">Fertilizer sales records</p>
+      <div class="tabs">
+        <button id="tabIn" type="button">Sign in</button>
+        <button id="tabUp" type="button" class="secondary">Create account</button>
+      </div>
+
+      <form id="signInForm">
+        <label for="inEmail">Email</label>
+        <input id="inEmail" type="email" autocomplete="email" required>
+        <label for="inPass">Password</label>
+        <input id="inPass" type="password" autocomplete="current-password" required>
+        <button class="full" type="submit">Sign in</button>
+      </form>
+
+      <form id="signUpForm" class="hidden">
+        <label for="upName">Full name</label>
+        <input id="upName" type="text" autocomplete="name" required>
+        <label for="upEmail">Email</label>
+        <input id="upEmail" type="email" autocomplete="email" required>
+        <label for="upPass">Password (at least 6 characters)</label>
+        <input id="upPass" type="password" autocomplete="new-password" minlength="6" required>
+        <button class="full" type="submit">Create account</button>
+      </form>
+
+      <div id="loginMsg" class="msg hidden"></div>
+    </div>
+  </section>
+
+  <!-- ===== Logged in: home ===== -->
+  <section id="homeView" class="hidden">
+    <header class="top">
+      <a class="brand" href="index.html">EMS System</a>
+      <span class="who"><span id="whoName"></span> <span id="whoRole" class="badge"></span></span>
+      <button id="signOutBtn" class="small secondary" type="button">Sign out</button>
+    </header>
+    <div class="wrap">
+      <div class="card">
+        <h2>Alerts 提醒</h2>
+        <ul id="alertList" class="alerts"><li>Loading…</li></ul>
+      </div>
+      <div class="card">
+        <h2>Menu</h2>
+        <div id="menu" class="menu"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Account switched off ===== -->
+  <section id="offView" class="wrap hidden">
+    <div class="card center-card">
+      <h2>Account not active</h2>
+      <p id="offText">Your account is switched off. Please ask the owner to switch it on.</p>
+      <button class="full secondary" type="button" onclick="signOut()">Sign out</button>
+    </div>
+  </section>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Pages for each role. "ready: false" = not built yet.
+const PAGES = [
+  { href: 'orders.html',   title: 'Orders 订单',          sub: 'Add and track orders',          roles: ['staff', 'manager', 'owner'], ready: false },
+  { href: 'products.html', title: 'Fertilizers & stock 库存', sub: 'See stock, add new stock',    roles: ['staff', 'manager', 'owner'], ready: false },
+  { href: 'report.html',   title: 'Report 报表',           sub: 'Sales, overdue, top items, AI', roles: ['owner'],                     ready: false },
+  { href: 'users.html',    title: 'Users & settings 用户与设定', sub: 'Roles and rule numbers',   roles: ['owner'],                     ready: false }
+];
+
+function showTab(which) {
+  const up = which === 'up';
+  $('signInForm').classList.toggle('hidden', up);
+  $('signUpForm').classList.toggle('hidden', !up);
+  $('tabIn').classList.toggle('secondary', up);
+  $('tabUp').classList.toggle('secondary', !up);
+  $('loginMsg').classList.add('hidden');
+}
+$('tabIn').onclick = () => showTab('in');
+$('tabUp').onclick = () => showTab('up');
+$('signOutBtn').onclick = signOut;
+
+$('signInForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = e.submitter; btn.disabled = true;
+  const { error } = await sb.auth.signInWithPassword({ email: $('inEmail').value.trim(), password: $('inPass').value });
+  btn.disabled = false;
+  if (error) return showMsg($('loginMsg'), friendlyError(error));
+  start();
+};
+
+$('signUpForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = e.submitter; btn.disabled = true;
+  const { data, error } = await sb.auth.signUp({
+    email: $('upEmail').value.trim(),
+    password: $('upPass').value,
+    options: {
+      data: { full_name: $('upName').value.trim() },
+      emailRedirectTo: location.origin + location.pathname
+    }
+  });
+  btn.disabled = false;
+  if (error) return showMsg($('loginMsg'), friendlyError(error));
+  if (data.session) return start();
+  showTab('in');
+  showMsg($('loginMsg'), 'Account created. Please open the email we sent you and click the link, then sign in.', 'ok');
+};
+
+async function start() {
+  ['loginView', 'homeView', 'offView'].forEach(v => $(v).classList.add('hidden'));
+  let profile;
+  try {
+    profile = await getProfile();
+  } catch (err) {
+    $('loginView').classList.remove('hidden');
+    return showMsg($('loginMsg'), friendlyError(err));
+  }
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return $('loginView').classList.remove('hidden');
+  if (!profile) {
+    $('offText').textContent = 'Your account is not set up yet. Please ask the owner, or try again in a minute.';
+    return $('offView').classList.remove('hidden');
+  }
+  if (!profile.active) return $('offView').classList.remove('hidden');
+
+  $('homeView').classList.remove('hidden');
+  $('whoName').textContent = profile.full_name || profile.email;
+  $('whoRole').textContent = ROLE_LABEL[profile.role] || profile.role;
+
+  $('menu').innerHTML = PAGES.filter(p => p.roles.includes(profile.role)).map(p => p.ready
+    ? `<a href="${p.href}"><div class="title">${esc(p.title)}</div><div class="sub">${esc(p.sub)}</div></a>`
+    : `<div class="soon"><div class="title">${esc(p.title)}</div><div class="sub">Coming soon</div></div>`
+  ).join('');
+
+  try {
+    renderAlerts($('alertList'), await loadAlerts(profile));
+  } catch (err) {
+    $('alertList').innerHTML = `<li class="danger">${esc(friendlyError(err))}</li>`;
+  }
+}
+
+start();
+</script>
 </body>
 </html>
