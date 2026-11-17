@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orders · EMS System</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <style>
+    .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+    .row > * { flex: 1 1 140px; }
+    .line { display: grid; grid-template-columns: 1fr 90px 40px; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .line .x { padding: 8px 0; background: transparent; color: var(--danger); border-color: var(--line); }
+    .total { font-size: 1.15rem; font-weight: 700; margin-top: 12px; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+    .filters > * { flex: 1 1 160px; }
+    .order { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    .order .head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .order .cust { font-weight: 700; }
+    .order .amt { font-weight: 700; white-space: nowrap; }
+    .order .meta { color: var(--muted); font-size: .9rem; margin-top: 4px; }
+    .order .items { margin: 6px 0 0; padding-left: 18px; font-size: .95rem; }
+    .order .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .st { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .st.pending { background: var(--info-bg); color: var(--info); }
+    .st.approved { background: var(--warn-bg); color: var(--warn); }
+    .st.paid { background: var(--ok-bg); color: var(--ok); }
+    .st.cancelled { background: var(--line); color: var(--muted); }
+    .st.overdue { background: var(--danger-bg); color: var(--danger); }
+    button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+    .summary { color: var(--muted); font-size: .9rem; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="index.html">← EMS System</a>
+    <span class="who"><span id="whoName"></span> <span id="whoRole" class="badge"></span></span>
+    <button class="small secondary" type="button" onclick="signOut()">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <!-- New / edit order -->
+    <div class="card">
+      <h2 id="formTitle">New order 新增订单</h2>
+      <form id="orderForm">
+        <div class="row">
+          <div>
+            <label for="custName">Customer name 客户名</label>
+            <input id="custName" type="text" required maxlength="120">
+          </div>
+          <div>
+            <label for="orderDate">Order date 订单日期</label>
+            <input id="orderDate" type="date" required>
+          </div>
+        </div>
+        <label>Fertilizers 肥料 (bags 包)</label>
+        <div id="lines"></div>
+        <button id="addLine" class="small secondary" type="button">+ Add fertilizer</button>
+        <div class="total">Total: <span id="total">RM 0.00</span></div>
+        <div class="row" style="margin-top:12px">
+          <button id="saveBtn" type="submit">Save order</button>
+          <button id="cancelEdit" class="secondary hidden" type="button">Stop editing</button>
+        </div>
+        <div id="formMsg" class="msg hidden"></div>
+      </form>
+    </div>
+
+    <!-- List -->
+    <div class="card">
+      <h2>Orders 订单</h2>
+      <div class="filters">
+        <select id="fStatus" aria-label="Status">
+          <option value="">All statuses</option>
+          <option value="pending">Waiting approval 待批准</option>
+          <option value="approved">Approved, not paid 已批准（未付款）</option>
+          <option value="overdue">Overdue 逾期</option>
+          <option value="paid">Paid 已付款</option>
+          <option value="cancelled">Cancelled 已取消</option>
+        </select>
+        <input id="fSearch" type="search" placeholder="Search customer…" aria-label="Search customer">
+      </div>
+      <div id="listMsg" class="msg hidden"></div>
+      <p id="summary" class="summary" style="margin-top:12px"></p>
+      <div id="list">Loading…</div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ME, SETTINGS, PRODUCTS = [], ORDERS = [], NAMES = {}, editingId = null;
+
+function isBoss() { return ME.role === 'manager' || ME.role === 'owner'; }
+
+function isOverdue(o) {
+  return o.status === 'approved' && daysSince(o.order_date) > SETTINGS.overdueDays;
+}
+
+// ---------- form ----------
+function productOptions(selected) {
+  const list = PRODUCTS.filter(p => p.active || p.id === selected);
+  return '<option value="">Choose fertilizer…</option>' + list.map(p =>
+    `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)} — ${fmtRM(p.price_per_bag)}/bag (stock ${p.stock_bags})</option>`
+  ).join('');
+}
+
+function addLine(productId, bags) {
+  const div = document.createElement('div');
+  div.className = 'line';
+  div.innerHTML = `
+    <select class="p" aria-label="Fertilizer" required>${productOptions(productId || '')}</select>
+    <input class="b" type="number" min="1" step="1" placeholder="Bags" aria-label="Bags" required value="${bags || ''}">
+    <button class="x" type="button" aria-label="Remove">✕</button>`;
+  div.querySelector('.x').onclick = () => { div.remove(); if (!$('lines').children.length) addLine(); calcTotal(); };
+  div.querySelector('.p').onchange = calcTotal;
+  div.querySelector('.b').oninput = calcTotal;
+  $('lines').appendChild(div);
+  calcTotal();
+}
+
+function readLines() {
+  return [...$('lines').children].map(d => ({
+    product_id: d.querySelector('.p').value,
+    bags: parseInt(d.querySelector('.b').value, 10)
+  }));
+}
+
+function calcTotal() {
+  let t = 0;
+  readLines().forEach(l => {
+    const p = PRODUCTS.find(x => x.id === l.product_id);
+    if (p && l.bags > 0) t += p.price_per_bag * l.bags;
+  });
+  $('total').textContent = fmtRM(t);
+}
+
+function resetForm() {
+  editingId = null;
+  $('orderForm').reset();
+  $('orderDate').value = todayISO();
+  $('lines').innerHTML = '';
+  addLine();
+  $('formTitle').textContent = 'New order 新增订单';
+  $('saveBtn').textContent = 'Save order';
+  $('cancelEdit').classList.add('hidden');
+}
+
+function startEdit(id) {
+  const o = ORDERS.find(x => x.id === id);
+  if (!o) return;
+  editingId = id;
+  $('custName').value = o.customer_name;
+  $('orderDate').value = o.order_date;
+  $('lines').innerHTML = '';
+  (o.items || []).forEach(it => addLine(it.product_id, it.bags));
+  $('formTitle').textContent = 'Edit order 修改订单';
+  $('saveBtn').textContent = 'Save changes';
+  $('cancelEdit').classList.remove('hidden');
+  $('formMsg').classList.add('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+$('addLine').onclick = () => addLine();
+$('cancelEdit').onclick = resetForm;
+
+$('orderForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const lines = readLines();
+  if (lines.some(l => !l.product_id)) return showMsg($('formMsg'), 'Please choose a fertilizer on every line.');
+  if (lines.some(l => !(l.bags > 0))) return showMsg($('formMsg'), 'Number of bags must be more than 0.');
+  const row = {
+    customer_name: $('custName').value.trim(),
+    order_date: $('orderDate').value,
+    items: lines
+  };
+  if (!row.customer_name) return showMsg($('formMsg'), 'Please type the customer name.');
+
+  $('saveBtn').disabled = true;
+  const res = editingId
+    ? await sb.from('orders').update(row).eq('id', editingId).select().maybeSingle()
+    : await sb.from('orders').insert(row).select().single();
+  $('saveBtn').disabled = false;
+
+  if (res.error) return showMsg($('formMsg'), friendlyError(res.error));
+  if (!res.data) return showMsg($('formMsg'), 'This order can no longer be changed.');
+  const wasEdit = !!editingId;
+  resetForm();
+  showMsg($('formMsg'), wasEdit
+    ? `Saved. ${res.data.customer_name}, ${fmtRM(res.data.amount)}.`
+    : `Order saved: ${res.data.customer_name}, ${fmtRM(res.data.amount)}. Waiting for approval.`, 'ok');
+  await loadOrders();
+};
+
+// ---------- list ----------
+async function loadOrders() {
+  const { data, error } = await sb.from('orders').select('*')
+    .order('order_date', { ascending: false }).order('created_at', { ascending: false }).limit(500);
+  if (error) { $('list').innerHTML = ''; return showMsg($('listMsg'), friendlyError(error)); }
+  ORDERS = data || [];
+  renderList();
+}
+
+function renderList() {
+  const fs = $('fStatus').value;
+  const q = $('fSearch').value.trim().toLowerCase();
+  const rows = ORDERS.filter(o =>
+    (!fs || (fs === 'overdue' ? isOverdue(o) : o.status === fs)) &&
+    (!q || o.customer_name.toLowerCase().includes(q)));
+
+  const total = rows.filter(o => o.status !== 'cancelled').reduce((s, o) => s + Number(o.amount), 0);
+  $('summary').textContent = `${rows.length} order(s) · Total (not counting cancelled): ${fmtRM(total)}`;
+
+  if (!rows.length) { $('list').innerHTML = '<p class="muted">No orders found.</p>'; return; }
+
+  $('list').innerHTML = rows.map(o => {
+    const over = isOverdue(o);
+    const days = daysSince(o.order_date);
+    const by = isBoss() ? (NAMES[o.created_by] || 'Unknown') : '';
+    const items = (o.items || []).map(it =>
+      `<li>${esc(it.name)} × ${it.bags} bags @ ${fmtRM(it.price)}</li>`).join('');
+    const btns = [];
+    if (o.status === 'pending' && (isBoss() || o.created_by === ME.id)) btns.push(`<button class="small secondary" data-act="edit" data-id="${o.id}">Edit</button>`);
+    if (isBoss() && o.status === 'pending') btns.push(`<button class="small" data-act="approved" data-id="${o.id}">Approve 批准</button>`);
+    if (isBoss() && o.status === 'approved') btns.push(`<button class="small" data-act="paid" data-id="${o.id}">Mark paid 已付款</button>`);
+    if (isBoss() && (o.status === 'pending' || o.status === 'approved')) btns.push(`<button class="small danger" data-act="cancelled" data-id="${o.id}">Cancel 取消</button>`);
+    if (ME.role === 'owner') btns.push(`<button class="small danger" data-act="delete" data-id="${o.id}">Delete</button>`);
+    return `
+      <div class="order">
+        <div class="head">
+          <span class="cust">${esc(o.customer_name)}</span>
+          <span class="amt">${fmtRM(o.amount)}</span>
+        </div>
+        <div class="meta">
+          ${fmtDate(o.order_date)}
+          · <span class="st ${o.status}">${esc(STATUS_LABEL[o.status])}</span>
+          ${over ? `<span class="st overdue">Overdue ${days} days 逾期</span>` : ''}
+          ${by ? ` · by ${esc(by)}` : ''}
+          ${o.paid_at ? ` · paid ${fmtDate(o.paid_at)}` : ''}
+        </div>
+        <ul class="items">${items}</ul>
+        ${btns.length ? `<div class="actions">${btns.join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+$('fStatus').onchange = renderList;
+$('fSearch').oninput = renderList;
+
+const CONFIRM = {
+  approved: o => `Approve the order for ${o.customer_name} (${fmtRM(o.amount)})? Stock will go down.`,
+  paid: o => `Mark the order for ${o.customer_name} (${fmtRM(o.amount)}) as PAID?`,
+  cancelled: o => `Cancel the order for ${o.customer_name} (${fmtRM(o.amount)})?` + (o.status === 'approved' ? ' The bags will go back into stock.' : ''),
+  delete: o => `Delete the order for ${o.customer_name} (${fmtRM(o.amount)}) forever? This cannot be undone.`
+};
+
+$('list').onclick = async (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const act = b.dataset.act, id = b.dataset.id;
+  const o = ORDERS.find(x => x.id === id);
+  if (!o) return;
+  if (act === 'edit') return startEdit(id);
+  if (!confirm(CONFIRM[act](o))) return;
+
+  b.disabled = true;
+  $('listMsg').classList.add('hidden');
+  const res = act === 'delete'
+    ? await sb.from('orders').delete().eq('id', id).select()
+    : await sb.from('orders').update({ status: act }).eq('id', id).select();
+  b.disabled = false;
+  if (res.error) return showMsg($('listMsg'), friendlyError(res.error));
+  if (!res.data || !res.data.length) return showMsg($('listMsg'), 'Sorry, you are not allowed to do this.');
+  const done = { approved: 'Approved.', paid: 'Marked as paid.', cancelled: 'Cancelled.', delete: 'Deleted.' }[act];
+  showMsg($('listMsg'), `${done} ${o.customer_name}, ${fmtRM(o.amount)}.`, 'ok');
+  if (act === 'approved' || act === 'cancelled') await loadProducts();
+  await loadOrders();
+};
+
+async function loadProducts() {
+  const { data, error } = await sb.from('products').select('id,name,price_per_bag,stock_bags,active').order('name');
+  if (error) throw error;
+  PRODUCTS = (data || []).map(p => ({ ...p, price_per_bag: Number(p.price_per_bag) }));
+  // refresh dropdown labels (stock numbers) without losing choices
+  [...$('lines').children].forEach(d => {
+    const sel = d.querySelector('.p'); const v = sel.value;
+    sel.innerHTML = productOptions(v);
+  });
+}
+
+// ---------- start ----------
+(async () => {
+  ME = await requireRole(['staff', 'manager', 'owner']);
+  if (!ME) return;
+  $('whoName').textContent = ME.full_name || ME.email;
+  $('whoRole').textContent = ROLE_LABEL[ME.role];
+  try {
+    SETTINGS = await getSettings();
+    await loadProducts();
+    if (isBoss()) {
+      const { data } = await sb.from('profiles').select('id,full_name,email');
+      (data || []).forEach(p => { NAMES[p.id] = p.full_name || p.email; });
+    }
+  } catch (err) {
+    return showMsg($('listMsg'), friendlyError(err));
+  }
+  const params = new URLSearchParams(location.search);
+  if (params.get('filter') === 'overdue') $('fStatus').value = 'overdue';
+  else if (params.get('status')) $('fStatus').value = params.get('status');
+  resetForm();
+  await loadOrders();
+})();
+</script>
+</body>
+</html>
